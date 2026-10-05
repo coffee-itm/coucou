@@ -29,7 +29,7 @@ permissions:
 # download the Coucou-Linux artifact, try it, then set this to 'true' and push a
 # linux-v* tag.
 env:
-  PUBLISH: 'false'
+  PUBLISH: 'true'
 
 jobs:
   build:
