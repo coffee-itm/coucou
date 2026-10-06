@@ -111,7 +111,7 @@ jobs:
           npm run pack
           echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
           cd release
-          sha256sum Coucou-Linux-* > SHA256SUMS
+          sha256sum Coucou-Linux-*-x86_64.AppImage > SHA256SUMS
           ls -la
           cat SHA256SUMS
 
@@ -127,7 +127,7 @@ jobs:
         with:
           name: Coucou-Linux
           path: |
-            windows/release/Coucou-Linux-*
+            windows/release/Coucou-Linux-*-x86_64.AppImage
             windows/release/SHA256SUMS
           retention-days: 3
 
@@ -158,10 +158,8 @@ jobs:
           notes="Coucou for Linux $v — Mochi at the top of your screen.
 
           - **AppImage** (any distribution): \`chmod +x Coucou-Linux-$v-x86_64.AppImage\` and run it.
-          - **Debian / Ubuntu**: \`sudo apt install ./Coucou-Linux-$v-amd64.deb\`
-          - **Fedora / openSUSE**: \`sudo dnf install ./Coucou-Linux-$v-x86_64.rpm\`
 
-          Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`.
+          Check the download with \`sha256sum -c SHA256SUMS --ignore-missing\`.
 
           The island sits on the top edge on compositors with layer-shell (COSMIC,
           KDE Plasma, Hyprland, Sway…). On GNOME it opens as a regular window."
@@ -169,8 +167,6 @@ jobs:
           # the site's Download for Mac button points at.
           gh release create "$GITHUB_REF_NAME" \
             "release/Coucou-Linux-$v-x86_64.AppImage" \
-            "release/Coucou-Linux-$v-amd64.deb" \
-            "release/Coucou-Linux-$v-x86_64.rpm" \
             "release/SHA256SUMS" \
             --title "Coucou for Linux $v" \
             --notes "$notes" \
