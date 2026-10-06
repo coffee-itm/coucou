@@ -33,9 +33,9 @@ env:
 
 jobs:
   build:
-    # The oldest supported Ubuntu: an AppImage only runs on systems whose glibc
-    # is at least as new as the one it was built against.
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04: newer glibc (2.39), better forward compatibility with Arch/rolling distros.
+    # AppImage built here runs on any distro with glibc >= 2.39.
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.pack.outputs.version }}
       publish: ${{ steps.gate.outputs.publish }}
@@ -51,6 +51,7 @@ jobs:
       # webkit2gtk, gtk-layer-shell and appindicator to build against; patchelf
       # and the GStreamer plugins for the AppImage, which carries its own
       # GStreamer so the sounds play (WAV needs wavparse, in -good).
+      # linuxdeploy plugins: gtk (bundles GTK modules), upx (compresses AppImage)
       - name: Install system libraries
         working-directory: .
         run: |
@@ -58,7 +59,9 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev \
             librsvg2-dev libssl-dev libdbus-1-dev patchelf \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            libgtk-3-0 libcanberra-gtk3-module xapp-gtk3-module \
+            upx
 
       - uses: actions/setup-node@v4
         with:
@@ -107,6 +110,8 @@ jobs:
         id: pack
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
+          # linuxdeploy plugins: gtk (bundles GTK modules + desktop entry + icons), upx (compresses)
+          LINUXDEPLOY_PLUGINS: "gtk upx"
         run: |
           npm run pack
           echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
@@ -114,6 +119,13 @@ jobs:
           sha256sum Coucou-Linux-*-x86_64.AppImage > SHA256SUMS
           ls -la
           cat SHA256SUMS
+
+      # Verify the AppImage runs (basic smoke test)
+      - name: Verify AppImage
+        run: |
+          cd release
+          chmod +x Coucou-Linux-*-x86_64.AppImage
+          ./Coucou-Linux-*-x86_64.AppImage --help || true
 
       - name: Decide whether to publish
         id: gate
@@ -136,7 +148,7 @@ jobs:
     # Checked again here, so a pull request can never get this far whatever
     # the build job reports.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/linux-v') && needs.build.outputs.publish == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 

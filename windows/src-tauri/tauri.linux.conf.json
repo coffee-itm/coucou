@@ -12,7 +12,10 @@
     },
     "linux": {
       "appimage": {
-        "bundleMediaFramework": true
+        "bundleMediaFramework": true,
+        "linuxdeploy": {
+          "plugins": ["gtk", "upx"]
+        }
       },
       "deb": {
         "depends": [
@@ -23,7 +26,21 @@
         "depends": [
           "gtk-layer-shell"
         ]
-      }
+      },
+      "desktopEntry": {
+        "name": "Coucou",
+        "comment": "Mochi lives at the top of your screen",
+        "categories": ["Development", "Utility"],
+        "keywords": ["claude", "coding", "ai", "assistant"],
+        "startupNotify": false,
+        "startupWMClass": "coucou"
+      },
+      "icon": "icon.png",
+      "icons": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png"
+      ]
     }
   },
   "app": {
