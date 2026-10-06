@@ -60,7 +60,7 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev \
             librsvg2-dev libssl-dev libdbus-1-dev patchelf \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            libgtk-3-0 libcanberra-gtk3-module xapp-gtk3-module \
+            libgtk-3-0 libcanberra-gtk3-module \
             upx
 
       - uses: actions/setup-node@v4
