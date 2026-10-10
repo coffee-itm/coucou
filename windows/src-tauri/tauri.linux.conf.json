@@ -12,10 +12,7 @@
     },
     "linux": {
       "appimage": {
-        "bundleMediaFramework": true,
-        "linuxdeploy": {
-          "plugins": ["gtk", "upx"]
-        }
+        "bundleMediaFramework": true
       },
       "deb": {
         "depends": [
