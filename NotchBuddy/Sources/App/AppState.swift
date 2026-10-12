@@ -104,11 +104,17 @@ final class AppState: ObservableObject {
     @Published var lmstudioChatModel: String = ChatProvider.lmstudio.defaultModel {
         didSet { UserDefaults.standard.set(lmstudioChatModel, forKey: "lmstudioChatModel") }
     }
+    @Published var customChatModel: String = ChatProvider.custom.defaultModel {
+        didSet { UserDefaults.standard.set(customChatModel, forKey: "customChatModel") }
+    }
     @Published var ollamaServerURL: String = "" {
         didSet { UserDefaults.standard.set(ollamaServerURL, forKey: "ollamaServerURL") }
     }
     @Published var lmstudioServerURL: String = "" {
         didSet { UserDefaults.standard.set(lmstudioServerURL, forKey: "lmstudioServerURL") }
+    }
+    @Published var customBaseURL: String = "" {
+        didSet { UserDefaults.standard.set(customBaseURL, forKey: "customBaseURL") }
     }
 
     // The always-on workspace pill (default: VS Code). Persisted.
@@ -173,6 +179,7 @@ final class AppState: ObservableObject {
             case .anthropic: models = await ClaudeService.fetchModels(apiKey: apiKey)
             case .google:    models = await ClaudeService.fetchGoogleModels(apiKey: apiKey)
             case .openai:    models = await ClaudeService.fetchOpenAIModels(apiKey: apiKey)
+            case .custom:    models = await ClaudeService.fetchCustomModels(baseURL: customBaseURL, apiKey: apiKey)
             case .ollama, .lmstudio: models = []  // handled above
             }
             loadingProviderModels.remove(provider)
@@ -193,6 +200,10 @@ final class AppState: ObservableObject {
                     if !models.contains(where: { $0.id == openAIChatModel }) {
                         openAIChatModel = models.first(where: { $0.id.contains("mini") })?.id ?? models.first!.id
                     }
+                case .custom:
+                    if !models.contains(where: { $0.id == customChatModel }) {
+                        customChatModel = models.first?.id ?? customChatModel
+                    }
                 case .ollama, .lmstudio: break
                 }
             }
@@ -207,6 +218,7 @@ final class AppState: ObservableObject {
         case .openai:    return openAIChatModel
         case .ollama:    return ollamaChatModel
         case .lmstudio:  return lmstudioChatModel
+        case .custom:    return customChatModel
         }
     }
 
@@ -413,8 +425,10 @@ final class AppState: ObservableObject {
         if let v = ud.string(forKey: "openAIChatModel"), !v.isEmpty { openAIChatModel = v }
         if let v = ud.string(forKey: "ollamaChatModel"), !v.isEmpty { ollamaChatModel = v }
         if let v = ud.string(forKey: "lmstudioChatModel"), !v.isEmpty { lmstudioChatModel = v }
+        if let v = ud.string(forKey: "customChatModel"), !v.isEmpty { customChatModel = v }
         if let v = ud.string(forKey: "ollamaServerURL"), !v.isEmpty { ollamaServerURL = v }
         if let v = ud.string(forKey: "lmstudioServerURL"), !v.isEmpty { lmstudioServerURL = v }
+        if let v = ud.string(forKey: "customBaseURL"), !v.isEmpty { customBaseURL = v }
         // Migrate old 60s default → 15s
         if let v = ud.object(forKey: "autoCloseInterval") as? Double {
             autoCloseInterval = (v == 60) ? 15 : v

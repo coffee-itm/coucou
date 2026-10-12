@@ -1389,6 +1389,7 @@ struct ModelPickerView: View {
                             case .openai:    state.openAIChatModel = model.id
                             case .ollama:    state.ollamaChatModel = model.id
                             case .lmstudio:  state.lmstudioChatModel = model.id
+                            case .custom:    state.customChatModel = model.id
                             }
                             isPresented = false
                             SoundEngine.shared.play("blip")
@@ -1749,6 +1750,7 @@ struct IntegrationCardView: View {
                 case "ai_anthropic": model = appState.claudeModel
                 case "ai_google":    model = appState.googleChatModel
                 case "ai_openai":    model = appState.openAIChatModel
+                case "ai_custom":    model = appState.customChatModel
                 default:             model = ""
                 }
                 return "Key configured · \(model)"
@@ -1758,7 +1760,13 @@ struct IntegrationCardView: View {
             if isHooks { return "Hooks not installed" }
             if isAI {
                 let provider = ChatProvider(pillID: task.id)!
-                return provider.isLocal ? "Not connected" : "Key not configured"
+                if provider.isLocal {
+                    return "Not connected"
+                } else if provider == .custom {
+                    return "Not configured"
+                } else {
+                    return "Key not configured"
+                }
             }
             return "Key not configured"
         }

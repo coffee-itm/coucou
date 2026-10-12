@@ -16,14 +16,44 @@ pub struct Settings {
     pub screen: String,
     pub autostart: bool,
     pub hooks_installed: bool,
-    /// Claude model used by the chat. Changeable in the settings window.
-    /// Defaulted explicitly so a settings.json written by an older build still loads.
+    /// Chat provider: "anthropic" | "google" | "openai" | "custom"
+    #[serde(default = "default_chat_provider")]
+    pub chat_provider: String,
+    /// Anthropic model used by the chat.
     #[serde(default = "default_model")]
     pub model: String,
+    /// Google AI model.
+    #[serde(default = "default_google_model")]
+    pub google_model: String,
+    /// OpenAI model.
+    #[serde(default = "default_openai_model")]
+    pub openai_model: String,
+    /// Custom (OpenAI-compatible) base URL, e.g. "http://localhost:3001/v1"
+    #[serde(default)]
+    pub custom_base_url: String,
+    /// Custom model ID.
+    #[serde(default = "default_custom_model")]
+    pub custom_model: String,
+}
+
+fn default_chat_provider() -> String {
+    "anthropic".into()
 }
 
 fn default_model() -> String {
     crate::claude::DEFAULT_MODEL.to_string()
+}
+
+fn default_google_model() -> String {
+    "gemini-2.0-flash".into()
+}
+
+fn default_openai_model() -> String {
+    "gpt-4o".into()
+}
+
+fn default_custom_model() -> String {
+    "custom-model".into()
 }
 
 impl Default for Settings {
@@ -42,7 +72,12 @@ impl Default for Settings {
             screen: "primary".into(),
             autostart: false,
             hooks_installed: false,
+            chat_provider: default_chat_provider(),
             model: default_model(),
+            google_model: default_google_model(),
+            openai_model: default_openai_model(),
+            custom_base_url: "".into(),
+            custom_model: default_custom_model(),
         }
     }
 }

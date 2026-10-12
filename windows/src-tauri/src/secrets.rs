@@ -16,6 +16,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "resend-api-key",
     "notion-api-key",
     "calcom-api-key",
+    "custom-api-key",
+    "custom-base-url",
 ];
 
 fn entry(key: &str) -> Option<Entry> {

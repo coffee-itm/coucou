@@ -57,6 +57,9 @@ struct SettingsView: View {
     // Multi-provider chat keys
     @State private var googleKey: String  = KeychainStore.shared.get("google-api-key") ?? ""
     @State private var openAIKey: String  = KeychainStore.shared.get("openai-api-key") ?? ""
+    @State private var customKey: String  = KeychainStore.shared.get("custom-api-key") ?? ""
+    @State private var customBaseURL: String = AppState.shared.customBaseURL
+    @State private var customModel: String = AppState.shared.customChatModel
     @State private var ollamaURL:    String = AppState.shared.ollamaServerURL
     @State private var lmstudioURL:  String = AppState.shared.lmstudioServerURL
     @State private var connectingOllama:    Bool = false
@@ -672,6 +675,69 @@ struct SettingsView: View {
             .padding(.vertical, 4)
         }
 
+        GroupBox("Custom (OpenAI-compatible)") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Connect any OpenAI-compatible endpoint (FreeLLMAPI, OpenRouter, Together.ai, etc.).")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 8) {
+                    Circle().fill(Color(hex: "#8B5CF6")).frame(width: 8, height: 8)
+                    Text("Custom").font(.system(size: 12, weight: .semibold))
+                }
+                TextField("Base URL (e.g. http://localhost:3001/v1)", text: $customBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("API key", text: $customKey)
+                    .textFieldStyle(.roundedBorder)
+
+                Divider()
+
+                if state.loadingProviderModels.contains(.custom) {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Fetching models…")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                } else if let error = state.providerModelFetchError[.custom] {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                } else if let models = state.fetchedProviderModels[.custom], !models.isEmpty {
+                    Picker("Model", selection: $customModel) {
+                        ForEach(models, id: \.id) { model in
+                            Text(model.label).tag(model.id)
+                        }
+                    }
+                    .onChange(of: customModel) { _, value in
+                        state.customChatModel = value
+                    }
+                } else {
+                    TextField("Model ID (e.g. google/gemini-2.0-flash)", text: $customModel)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: customModel) { _, value in
+                            state.customChatModel = value
+                        }
+                }
+
+                HStack {
+                    Button("Fetch Models") {
+                        state.fetchedProviderModels[.custom] = nil
+                        state.providerModelFetchError[.custom] = nil
+                        state.fetchModelsIfNeeded(for: .custom)
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Save") {
+                        KeychainStore.shared.set("custom-api-key", value: customKey)
+                        state.customBaseURL = customBaseURL
+                        statusMessage = "✓ Custom provider saved."
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+
         GroupBox("Local models") {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Connect to a local model server. No API key needed.")
@@ -1234,13 +1300,21 @@ struct SettingsView: View {
             if def.id == "agent_codex"         && !HookServer.codexHooksInstalled()  { return "Hooks not installed" }
             #endif
             if def.category == .ai {
-                if let provider = ChatProvider(pillID: def.id), provider.isLocal {
-                    let url = provider == .ollama ? state.ollamaServerURL : state.lmstudioServerURL
-                    if url.isEmpty { return "Not connected" }
-                } else {
-                    let keyId = def.id == "ai_anthropic" ? "anthropic-api-key"
-                               : def.id == "ai_google"    ? "google-api-key" : "openai-api-key"
-                    if KeychainStore.shared.get(keyId) == nil { return "Key not configured" }
+                if let provider = ChatProvider(pillID: def.id) {
+                    if provider.isLocal {
+                        let url = provider == .ollama ? state.ollamaServerURL : state.lmstudioServerURL
+                        if url.isEmpty { return "Not connected" }
+                    } else if provider == .custom {
+                        let url = state.customBaseURL
+                        let key = KeychainStore.shared.get("custom-api-key")
+                        if url.isEmpty || key == nil { return "Not configured" }
+                    } else {
+                        let keyId = def.id == "ai_anthropic" ? "anthropic-api-key"
+                                   : def.id == "ai_google"    ? "google-api-key"
+                                   : def.id == "ai_openai"    ? "openai-api-key"
+                                   : "custom-api-key"
+                        if KeychainStore.shared.get(keyId) == nil { return "Key not configured" }
+                    }
                 }
             }
             return nil

@@ -68,9 +68,39 @@ pub struct ChatReply {
     pub text: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsReply {
+    pub models: Vec<ModelInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub label: String,
+}
+
 /// One chat turn. Returns the assistant's text, or a message the island shows
 /// in the note view.
 pub async fn send(
+    chat: &Chat,
+    model: &str,
+    query: String,
+    context: Option<ChatContext>,
+) -> Result<ChatReply, String> {
+    let provider = crate::settings::load().chat_provider;
+    match provider.as_str() {
+        "anthropic" => send_anthropic(chat, model, query, context).await,
+        "google" => send_openai_compatible(chat, model, query, context, "google").await,
+        "openai" => send_openai_compatible(chat, model, query, context, "openai").await,
+        "custom" => send_openai_compatible(chat, model, query, context, "custom").await,
+        _ => send_anthropic(chat, model, query, context).await,
+    }
+}
+
+/// Anthropic API (with web search tool).
+async fn send_anthropic(
     chat: &Chat,
     model: &str,
     query: String,
@@ -81,8 +111,6 @@ pub async fn send(
 
     let mut content: Vec<Value> = Vec::new();
 
-    // File / window context rides along with the first message only, exactly
-    // like ClaudeService.chat().
     if chat.is_empty() {
         match &context {
             Some(ChatContext::File { name, path }) => {
@@ -117,12 +145,11 @@ pub async fn send(
     let response = match call(&key, &body).await {
         Ok(v) => v,
         Err(err) => {
-            chat.pop(); // keep the history consistent with what the model saw
+            chat.pop();
             return Err(err);
         }
     };
 
-    // A policy decline comes back as HTTP 200 with stop_reason "refusal".
     if response.get("stop_reason").and_then(Value::as_str) == Some("refusal") {
         chat.pop();
         let why = response
@@ -138,8 +165,6 @@ pub async fn send(
         return Err("Unexpected API response.".into());
     };
 
-    // Store the whole content — tool_use / tool_result blocks included — so the
-    // next turn has the right context.
     chat.push(json!({ "role": "assistant", "content": blocks.clone() }));
 
     let text = blocks
@@ -155,6 +180,231 @@ pub async fn send(
         return Err("No response text.".into());
     }
     Ok(ChatReply { text })
+}
+
+/// OpenAI-compatible API (Google Gemini, OpenAI, Custom/FreeLLMAPI).
+async fn send_openai_compatible(
+    chat: &Chat,
+    model: &str,
+    query: String,
+    context: Option<ChatContext>,
+    provider: &str,
+) -> Result<ChatReply, String> {
+    let settings = crate::settings::load();
+    
+    let (base_url, key) = match provider {
+        "google" => {
+            let key = secrets::get("google-api-key")
+                .ok_or_else(|| "Google API key missing. Open settings.".to_string())?;
+            ("https://generativelanguage.googleapis.com/v1beta/openai".to_string(), key)
+        }
+        "openai" => {
+            let key = secrets::get("openai-api-key")
+                .ok_or_else(|| "OpenAI API key missing. Open settings.".to_string())?;
+            ("https://api.openai.com/v1".to_string(), key)
+        }
+        "custom" => {
+            let base_url = settings.custom_base_url;
+            if base_url.is_empty() {
+                return Err("Custom base URL not configured. Open settings.".to_string());
+            }
+            let key = secrets::get("custom-api-key")
+                .ok_or_else(|| "Custom API key missing. Open settings.".to_string())?;
+            (normalize_url(&base_url), key)
+        }
+        _ => return Err(format!("Unknown provider: {provider}")),
+    };
+
+    let mut msgs: Vec<Value> = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
+    
+    for m in chat.snapshot() {
+        let mut simplified = m.clone();
+        if let Some(content) = m.get("content").and_then(|c| c.as_array()) {
+            if let Some(text_block) = content.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text")) {
+                if let Some(text) = text_block.get("text").and_then(|t| t.as_str()) {
+                    simplified["content"] = json!(text);
+                }
+            }
+        }
+        msgs.push(simplified);
+    }
+
+    let mut user_text = query;
+    if chat.is_empty() {
+        if let Some(ctx) = context {
+            match ctx {
+                ChatContext::File { name, path } => {
+                    user_text = format!("File: {name}\n\n{query}");
+                }
+                ChatContext::Window { app_name, title, url } => {
+                    let mut prefix = format!("Context — App: {app_name}, Window: {title}");
+                    if let Some(u) = url { prefix.push_str(&format!(", URL: {u}")); }
+                    user_text = format!("{prefix}\n\n{query}");
+                }
+            }
+        }
+    }
+    msgs.push(json!({ "role": "user", "content": user_text }));
+    chat.push(json!({ "role": "user", "content": user_text }));
+
+    let body = json!({
+        "model": model,
+        "max_tokens": MAX_TOKENS,
+        "messages": msgs,
+        "stream": true,
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{base_url}/chat/completions");
+    let mut req = client.post(&url)
+        .header("Authorization", format!("Bearer {key}"))
+        .header("Content-Type", "application/json")
+        .json(&body);
+
+    let response = req.send().await.map_err(|e| format!("Network error: {e}"))?;
+    
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()))
+            .unwrap_or(&text[..text.len().min(200)]);
+        return Err(format!("API {status}: {detail}"));
+    }
+
+    let mut accumulated = String::new();
+    let mut stream = response.bytes_stream();
+    
+    use futures_util::StreamExt;
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&chunk);
+        for line in text.lines() {
+            if let Some(delta) = parse_sse_delta(line) {
+                accumulated.push_str(&delta);
+            }
+        }
+    }
+
+    // Filter thinking blocks
+    let clean = filter_thinking_blocks(&accumulated);
+    chat.push(json!({ "role": "assistant", "content": clean.clone() }));
+    
+    Ok(ChatReply { text: clean })
+}
+
+fn normalize_url(url: &str) -> String {
+    let mut s = url.trim().to_string();
+    while s.ends_with('/') { s.pop(); }
+    for suffix in ["/api", "/v1", "/v1/"] {
+        if s.ends_with(suffix) { s.truncate(s.len() - suffix.len()); }
+    }
+    s
+}
+
+fn parse_sse_delta(line: &str) -> Option<String> {
+    if !line.starts_with("data: ") { return None; }
+    let payload = &line[6..];
+    if payload == "[DONE]" { return None; }
+    let data = payload.as_bytes();
+    let json: Value = serde_json::from_slice(data).ok()?;
+    let choices = json.get("choices")?.as_array()?;
+    let delta = choices.first()?.get("delta")?.as_object()?;
+    delta.get("content")?.as_str().map(|s| s.to_string())
+}
+
+fn filter_thinking_blocks(text: &str) -> String {
+    let pattern = "？？？[\\s\\S]*?回答";
+    let regex = regex::Regex::new(pattern).ok()?;
+    let range = std::ops::Range { start: 0, end: text.len() };
+    let result = regex.replace_all(text, "").to_string();
+    // Also handle <think blocks
+    let think_pattern = "(?s)<think>.*?</think>";
+    let think_regex = regex::Regex::new(think_pattern).ok()?;
+    think_regex.replace_all(&result, "").trim().to_string()
+}
+
+/// Fetch models from Anthropic API.
+pub async fn fetch_anthropic_models(api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let url = "https://api.anthropic.com/v1/models?limit=100";
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data = response.json::<Value>().await.map_err(|e| e.to_string())?;
+    let items = data.get("data").and_then(|d| d.as_array()).ok_or("No models data")?;
+    
+    let models = items.iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?;
+            let name = item.get("display_name")?.as_str()?;
+            Some(ModelInfo { id: id.to_string(), label: name.to_string() })
+        })
+        .collect();
+    
+    Ok(models)
+}
+
+/// Fetch models from Google API (OpenAI-compatible endpoint).
+pub async fn fetch_google_models(api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    fetch_openai_compatible_models("https://generativelanguage.googleapis.com/v1beta/openai", api_key).await
+}
+
+/// Fetch models from OpenAI API.
+pub async fn fetch_openai_models(api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    fetch_openai_compatible_models("https://api.openai.com/v1", api_key).await
+}
+
+/// Fetch models from custom OpenAI-compatible endpoint.
+pub async fn fetch_custom_models(base_url: &str, api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let url = normalize_url(base_url);
+    fetch_openai_compatible_models(&url, api_key).await
+}
+
+/// Generic fetch for OpenAI-compatible /models endpoint.
+async fn fetch_openai_compatible_models(base_url: &str, api_key: &str) -> Result<Vec<ModelInfo>, String> {
+    let url = format!("{base_url}/models");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    let data = response.json::<Value>().await.map_err(|e| e.to_string())?;
+    let items = data.get("data").and_then(|d| d.as_array()).ok_or("No models data")?;
+    
+    let excluded = ["embed", "bge-", "all-minilm", "clip", "rerank", "tts", "whisper", "dall-e", "audio", "image", "moderation", "embedding"];
+    
+    let models = items.iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?;
+            let lower = id.to_lowercase();
+            if excluded.iter().any(|e| lower.contains(e)) { return None; }
+            Some(ModelInfo { id: id.to_string(), label: id.to_string() })
+        })
+        .collect();
+    
+    Ok(models)
 }
 
 async fn call(key: &str, body: &Value) -> Result<Value, String> {
@@ -177,7 +427,6 @@ async fn call(key: &str, body: &Value) -> Result<Value, String> {
     let status = response.status();
     let text = response.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        // Surface the API's own message, which is what makes a bad key obvious.
         let detail = serde_json::from_str::<Value>(&text)
             .ok()
             .and_then(|v| {

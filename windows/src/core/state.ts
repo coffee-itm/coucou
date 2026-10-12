@@ -68,6 +68,14 @@ export const INTEGRATION_AGENTS: AgentTask[] = [
   task("integration_stripe", "Stripe", "#0570DE", "n8n"),
 ];
 
+/** AI provider pills for the chat. */
+export const AI_AGENTS: AgentTask[] = [
+  task("ai_anthropic", "Anthropic", "#E07950", "n8n"),
+  task("ai_google", "Google AI", "#4285F4", "n8n"),
+  task("ai_openai", "OpenAI", "#10A37F", "n8n"),
+  task("ai_custom", "Custom", "#8B5CF6", "n8n"),
+];
+
 export const TOGGLEABLE_INTEGRATION_IDS = [
   "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
   "integration_notion", "integration_calcom", "integration_stripe",
@@ -90,8 +98,18 @@ export interface Settings {
   screen: "primary" | "cursor";
   autostart: boolean;
   hooksInstalled: boolean;
-  /** Claude model used by the chat. */
+  /** Chat provider: "anthropic" | "google" | "openai" | "custom" */
+  chatProvider: string;
+  /** Anthropic model */
   model: string;
+  /** Google AI model */
+  googleModel: string;
+  /** OpenAI model */
+  openaiModel: string;
+  /** Custom (OpenAI-compatible) base URL */
+  customBaseUrl: string;
+  /** Custom model */
+  customModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -105,7 +123,12 @@ export const DEFAULT_SETTINGS: Settings = {
   screen: "primary",
   autostart: false,
   hooksInstalled: false,
+  chatProvider: "anthropic",
   model: "claude-opus-5",
+  googleModel: "gemini-2.0-flash",
+  openaiModel: "gpt-4o",
+  customBaseUrl: "",
+  customModel: "custom-model",
 };
 
 type Listener = () => void;
@@ -201,6 +224,7 @@ class AppState {
 
   /** loadIntegrationTasks() — VS Code always on, the rest opt-in (max 4). */
   loadIntegrationTasks() {
+    // Integration pills
     for (const proto of INTEGRATION_AGENTS) {
       const shouldLoad =
         proto.id === "integration_claude" || this.settings.activeIntegrations.includes(proto.id);
@@ -208,9 +232,15 @@ class AppState {
       if (shouldLoad && idx < 0) this.tasks.push({ ...proto, steps: [] });
       if (!shouldLoad && idx >= 0) this.tasks.splice(idx, 1);
     }
-    // Order: integration_claude first, then agent_* pills (visible in slice(0,4)),
-    // then other integrations in declaration order.
-    const order = INTEGRATION_AGENTS.map((t) => t.id);
+    // AI provider pills — only the active chat provider shows as a pill
+    for (const proto of AI_AGENTS) {
+      const shouldLoad = this.settings.chatProvider === proto.id.replace("ai_", "");
+      const idx = this.tasks.findIndex((t) => t.id === proto.id);
+      if (shouldLoad && idx < 0) this.tasks.push({ ...proto, steps: [] });
+      if (!shouldLoad && idx >= 0) this.tasks.splice(idx, 1);
+    }
+    // Order: integration_claude first, then agent_* pills, then integrations, then AI providers
+    const order = [...INTEGRATION_AGENTS.map((t) => t.id), ...AI_AGENTS.map((t) => t.id)];
     this.tasks.sort((a, b) => {
       const isAgentA = a.id.startsWith("agent_");
       const isAgentB = b.id.startsWith("agent_");

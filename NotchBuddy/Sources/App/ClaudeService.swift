@@ -64,6 +64,7 @@ final class KeychainStore: @unchecked Sendable {
         "anthropic-api-key",
         "google-api-key",
         "openai-api-key",
+        "custom-api-key",
         "resend-api-key", "resend-from",
         "n8n-url", "n8n-api-key",
         "vercel-token",
@@ -175,6 +176,28 @@ final class ClaudeService {
             .map { (id: $0.id, label: $0.id) }
     }
 
+    /// Fetches models from a custom OpenAI-compatible endpoint (e.g., FreeLLMAPI, OpenRouter).
+    /// Uses GET /v1/models with Bearer auth.
+    static func fetchCustomModels(baseURL: String, apiKey: String) async -> [(id: String, label: String)] {
+        let normalised = LocalChat.normaliseURL(baseURL)
+        guard !normalised.isEmpty,
+              let url = URL(string: "\(normalised)/models") else { return [] }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: req),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = json["data"] as? [[String: Any]] else { return [] }
+        // Filter out embedding/non-chat models (common patterns)
+        let excluded = ["embed", "bge-", "all-minilm", "clip", "rerank", "tts", "whisper", "dall-e", "audio", "image", "moderation"]
+        return items.compactMap { item -> (id: String, label: String)? in
+            guard let id = item["id"] as? String else { return nil }
+            let lower = id.lowercased()
+            guard !excluded.contains(where: { lower.contains($0) }) else { return nil }
+            return (id: id, label: id)
+        }
+    }
+
     /// Chosen in Settings; falls back to the default when the field is left empty.
     private var model: String {
         let m = AppState.shared.claudeModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -275,11 +298,13 @@ final class ClaudeService {
             baseURL = LocalChat.normaliseURL(state.ollamaServerURL)
         } else if provider == .lmstudio {
             baseURL = LocalChat.normaliseURL(state.lmstudioServerURL)
+        } else if provider == .custom {
+            baseURL = LocalChat.normaliseURL(state.customBaseURL)
         } else {
             switch provider {
             case .google:  baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
             case .openai:  baseURL = "https://api.openai.com/v1"
-            case .anthropic, .ollama, .lmstudio: baseURL = ""
+            case .anthropic, .ollama, .lmstudio, .custom: baseURL = ""
             }
         }
 
@@ -343,7 +368,7 @@ final class ClaudeService {
         msgs.append(["role": "user", "content": userText])
         conversationMessages.append(["role": "user", "content": userText])
 
-        let useStream = provider.isLocal
+        let useStream = provider.isLocal || provider == .custom
         var body: [String: Any] = [
             "model": state.activeChatModel,
             "max_tokens": 4096,

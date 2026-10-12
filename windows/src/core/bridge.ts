@@ -91,6 +91,8 @@ export const Bridge = {
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),
   secretClear: (key: string) => callOrThrow<void>("secret_clear", { key }),
+  /** Fetch models for the given provider ("anthropic" | "google" | "openai" | "custom"). */
+  fetchModels: (provider: string) => callOrThrow<{ models: { id: string; label: string }[] }>("fetch_models", { provider }),
 
   // ── Integrations ──────────────────────────────────────────────────────────
   refreshIntegration: (id: string) => call<void>("refresh_integration", { id }),

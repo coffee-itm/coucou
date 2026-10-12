@@ -10,6 +10,14 @@ import { h, clear } from "../views/dom";
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let version = "";
 
+// Track loading state for model fetching
+let loadingModels: Record<string, boolean> = {
+  anthropic: false,
+  google: false,
+  openai: false,
+  custom: false,
+};
+
 const root = document.getElementById("settings-root")!;
 
 async function save() {
@@ -171,90 +179,209 @@ function claudeSection(status: HookStatus): HTMLElement {
   return section;
 }
 
-// ── Claude API section ────────────────────────────────────────────────────────
+// ── Chat Providers section ──────────────────────────────────────────────────────
 
-const MODELS: [string, string][] = [
-  ["claude-opus-5", "Claude Opus 5"],
-  ["claude-sonnet-5", "Claude Sonnet 5"],
-  ["claude-haiku-4-5", "Claude Haiku 4.5"],
-];
+const PROVIDER_INFO: Record<string, { name: string; color: string; key: string; baseUrl?: string }> = {
+  anthropic: { name: "Anthropic", color: "#E07950", key: "anthropic-api-key" },
+  google:    { name: "Google AI", color: "#4285F4", key: "google-api-key" },
+  openai:    { name: "OpenAI", color: "#10A37F", key: "openai-api-key" },
+  custom:    { name: "Custom (OpenAI-compatible)", color: "#8B5CF6", key: "custom-api-key", baseUrl: "custom-base-url" },
+};
 
-function apiSection(hasKey: boolean): HTMLElement {
-  const dot = statusDot(hasKey);
-  const state = h("span", { class: "hint", text: hasKey ? "Key saved in the Windows Credential Manager." : "No key yet — the chat needs one." });
-
-  const field = h("input", {
-    type: "password",
-    placeholder: hasKey ? "••••••••••••  (stored)" : "sk-ant-...",
-    style: "flex:1 1 auto;min-width:0",
-    autocomplete: "off",
-    spellcheck: "false",
-  }) as HTMLInputElement;
-
-  const saveBtn = h("button", { class: "primary", text: "Save key" });
-  const clearBtn = h("button", { class: "danger", text: "Remove" });
-  const feedback = h("div", {});
-
-  async function refresh() {
-    const present = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-    dot.style.background = present ? "#22c55e" : "#f4505e";
-    state.textContent = present
-      ? "Key saved in the Windows Credential Manager."
-      : "No key yet — the chat needs one.";
-    field.placeholder = present ? "••••••••••••  (stored)" : "sk-ant-...";
-    clearBtn.style.display = present ? "" : "none";
-  }
-
-  saveBtn.addEventListener("click", async () => {
-    const value = field.value.trim();
-    if (!value) return;
-    clear(feedback);
-    try {
-      await Bridge.secretSet("anthropic-api-key", value);
-      field.value = "";
-      feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk." }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
+async function chatProvidersSection(): Promise<HTMLElement> {
+  const section = h("section", {});
+  const title = h("h2", {}, h("span", { text: "Chat providers" }));
+  const container = h("div", { style: "display:flex;flex-direction:column;gap:16px" });
+  
+  for (const [providerId, info] of Object.entries(PROVIDER_INFO)) {
+    const isCustom = providerId === "custom";
+    const providerSection = h("div", { style: "display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:8px" });
+    
+    // Provider header
+    const header = h("div", { style: "display:flex;align-items:center;gap:8px" });
+    header.append(
+      h("i", { class: "dot", style: `background:${info.color}` }),
+      h("span", { style: "font-weight:600;font-size:13px", text: info.name }),
+      h("span", { class: "hint", style: "margin-left:auto;font-size:11px", text: providerId === settings.chatProvider ? "Active" : "" })
+    );
+    providerSection.append(header);
+    
+    // API Key
+    const keyRow = h("div", { class: "row", style: "align-items:center" });
+    const keyField = h("input", {
+      type: "password",
+      placeholder: "••••••••••••  (stored)",
+      style: "flex:1 1 auto;min-width:0",
+      autocomplete: "off",
+      spellcheck: "false",
+    }) as HTMLInputElement;
+    const keySaveBtn = h("button", { class: "primary", text: "Save", style: "width:72px" });
+    const keyClearBtn = h("button", { class: "danger", text: "Remove", style: "width:72px;display:none" });
+    const keyDot = statusDot(false);
+    const keyFeedback = h("div", {});
+    
+    async function refreshKey() {
+      const present = (await Bridge.secretPresent(info.key)) ?? false;
+      keyDot.style.background = present ? "#22c55e" : "#f4505e";
+      keyField.placeholder = present ? "••••••••••••  (stored)" : (isCustom ? "freellmapi-..." : "sk-...");
+      keyClearBtn.style.display = present ? "" : "none";
     }
-  });
-
-  clearBtn.addEventListener("click", async () => {
-    clear(feedback);
-    try {
-      await Bridge.secretClear("anthropic-api-key");
-      feedback.append(h("div", { class: "notice ok", text: "Key removed." }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: `Could not remove: ${String(err)}` }));
+    
+    keySaveBtn.addEventListener("click", async () => {
+      const value = keyField.value.trim();
+      if (!value) return;
+      clear(keyFeedback);
+      try {
+        await Bridge.secretSet(info.key, value);
+        keyField.value = "";
+        keyFeedback.append(h("div", { class: "notice ok", text: "Saved." }));
+        await refreshKey();
+      } catch (err) {
+        keyFeedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
+      }
+    });
+    
+    keyClearBtn.addEventListener("click", async () => {
+      clear(keyFeedback);
+      try {
+        await Bridge.secretClear(info.key);
+        keyFeedback.append(h("div", { class: "notice ok", text: "Key removed." }));
+        await refreshKey();
+      } catch (err) {
+        keyFeedback.append(h("div", { class: "notice err", text: `Could not remove: ${String(err)}` }));
+      }
+    });
+    
+    keyRow.append(
+      h("label", { style: "min-width:104px", text: "API key" }),
+      keyField, keySaveBtn, keyClearBtn, keyDot
+    );
+    providerSection.append(keyRow);
+    providerSection.append(keyFeedback);
+    
+    // Custom base URL
+    if (isCustom) {
+      const urlRow = h("div", { class: "row", style: "align-items:center" });
+      const urlField = h("input", {
+        type: "text",
+        value: settings.customBaseUrl,
+        placeholder: "http://localhost:3001/v1",
+        style: "flex:1 1 auto;min-width:0",
+        autocomplete: "off",
+        spellcheck: "false",
+      }) as HTMLInputElement;
+      const urlSaveBtn = h("button", { class: "primary", text: "Save", style: "width:72px" });
+      
+      urlSaveBtn.addEventListener("click", async () => {
+        settings.customBaseUrl = urlField.value.trim();
+        await save();
+      });
+      
+      urlRow.append(
+        h("label", { style: "min-width:104px", text: "Base URL" }),
+        urlField, urlSaveBtn
+      );
+      providerSection.append(urlRow);
     }
-  });
-
-  const model = h("select", {}) as HTMLSelectElement;
-  for (const [id, label] of MODELS) model.append(h("option", { value: id, text: label }));
-  if (!MODELS.some(([id]) => id === settings.model)) {
-    model.append(h("option", { value: settings.model, text: settings.model }));
+    
+    // Model selection
+    const modelRow = h("div", { class: "row", style: "align-items:center" });
+    const modelSelect = h("select", { style: "flex:1 1 auto;min-width:0" }) as HTMLSelectElement;
+    const modelFetchBtn = h("button", { class: "secondary", text: "Fetch models", style: "width:110px" });
+    const modelSpinner = h("i", { class: "spinner", style: "width:16px;height:16px;display:none;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite" });
+    const modelFeedback = h("div", {});
+    
+    // Add spinner styles if not present
+    if (!document.getElementById("spinner-style")) {
+      const style = document.createElement("style");
+      style.id = "spinner-style";
+      style.textContent = "@keyframes spin { to { transform: rotate(360deg); } }";
+      document.head.appendChild(style);
+    }
+    
+    async function refreshModels() {
+      if (loadingModels[providerId]) return;
+      loadingModels[providerId] = true;
+      modelFetchBtn.disabled = true;
+      modelFetchBtn.style.display = "none";
+      modelSpinner.style.display = "inline-block";
+      clear(modelFeedback);
+      clear(modelSelect);
+      
+      try {
+        const resp = await Bridge.fetchModels(providerId);
+        for (const m of resp.models) {
+          modelSelect.append(h("option", { value: m.id, text: m.label }));
+        }
+        // Select current model
+        const currentModel = settings[providerId === "anthropic" ? "model" : 
+                                     providerId === "google" ? "googleModel" :
+                                     providerId === "openai" ? "openaiModel" : "customModel"];
+        if (resp.models.some(m => m.id === currentModel)) {
+          modelSelect.value = currentModel;
+        } else if (resp.models.length > 0) {
+          modelSelect.value = resp.models[0].id;
+          // Update settings with first model
+          if (providerId === "anthropic") settings.model = resp.models[0].id;
+          else if (providerId === "google") settings.googleModel = resp.models[0].id;
+          else if (providerId === "openai") settings.openaiModel = resp.models[0].id;
+          else settings.customModel = resp.models[0].id;
+          await save();
+        }
+      } catch (err) {
+        modelFeedback.append(h("div", { class: "notice err", text: `Failed to fetch: ${String(err)}` }));
+      } finally {
+        loadingModels[providerId] = false;
+        modelFetchBtn.disabled = false;
+        modelFetchBtn.style.display = "";
+        modelSpinner.style.display = "none";
+      }
+    }
+    
+    modelFetchBtn.addEventListener("click", refreshModels);
+    
+    modelSelect.addEventListener("change", async () => {
+      if (providerId === "anthropic") settings.model = modelSelect.value;
+      else if (providerId === "google") settings.googleModel = modelSelect.value;
+      else if (providerId === "openai") settings.openaiModel = modelSelect.value;
+      else settings.customModel = modelSelect.value;
+      await save();
+    });
+    
+    modelRow.append(
+      h("label", { style: "min-width:104px", text: "Model" }),
+      modelSelect, modelFetchBtn, modelSpinner
+    );
+    providerSection.append(modelRow);
+    providerSection.append(modelFeedback);
+    
+    // Active radio
+    const activeRow = h("div", { class: "row", style: "align-items:center" });
+    const activeRadio = h("input", { type: "radio", name: "chat-provider", checked: settings.chatProvider === providerId }) as HTMLInputElement;
+    activeRadio.addEventListener("change", async () => {
+      settings.chatProvider = providerId;
+      await save();
+      // Re-render to update active indicator
+      clear(root);
+      await drawAll();
+    });
+    activeRow.append(
+      h("label", { style: "min-width:104px", text: "Use for chat" }),
+      activeRadio
+    );
+    providerSection.append(activeRow);
+    
+    container.append(providerSection);
+    await refreshKey();
   }
-  model.value = settings.model;
-  model.addEventListener("change", () => {
-    settings.model = model.value;
-    void save();
-  });
-
-  clearBtn.style.display = hasKey ? "" : "none";
-
-  return h(
-    "section",
-    {},
-    h("h2", {}, dot, h("span", { text: "Claude" })),
-    state,
-    h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
-    h("div", { class: "row" }, h("label", { text: "Model" }), model),
-    feedback,
-  );
+  
+  section.append(title, container);
+  return section;
 }
 
 // ── Integrations section ──────────────────────────────────────────────────────
+
+// ... rest of the file
 
 interface IntegrationDef {
   id: string;
@@ -419,21 +546,15 @@ function generalSection(): HTMLElement {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
-async function main() {
-  const boot = await Bridge.boot();
-  if (boot) {
-    settings = { ...settings, ...boot.settings };
-    version = boot.version;
-  }
+async function drawAll() {
   const status = (await Bridge.hooksStatus()) ?? {
     installed: false, settingsPath: "", hookPath: "", hookReady: false,
   };
 
-  const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-
   const keys = [
     "stripe-api-key", "github-token", "vercel-token",
     "n8n-url", "n8n-api-key", "resend-api-key", "notion-api-key", "calcom-api-key",
+    "anthropic-api-key", "google-api-key", "openai-api-key", "custom-api-key",
   ];
   const present: Record<string, boolean> = {};
   for (const k of keys) present[k] = (await Bridge.secretPresent(k)) ?? false;
@@ -442,7 +563,7 @@ async function main() {
   root.append(
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
     claudeSection(status),
-    apiSection(hasKey),
+    await chatProvidersSection(),
     integrationsSection(present),
     generalSection(),
     h("div", {
@@ -450,6 +571,16 @@ async function main() {
       text: "No telemetry. Network requests only go to the services you configure yourself.",
     }),
   );
+}
+
+async function main() {
+  const boot = await Bridge.boot();
+  if (boot) {
+    settings = { ...settings, ...boot.settings };
+    version = boot.version;
+  }
+
+  await drawAll();
 
   void onEvent<Settings>("settings-changed", (s) => {
     settings = { ...settings, ...s };

@@ -20,7 +20,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
-use claude::{Chat, ChatContext, ChatReply};
+use claude::{Chat, ChatContext, ChatReply, ModelsReply, ModelInfo,
+    fetch_anthropic_models, fetch_google_models, fetch_openai_models, fetch_custom_models};
 use files::DroppedFile;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
@@ -272,6 +273,40 @@ fn secret_clear(key: String) -> Result<(), String> {
     secrets::clear(&key)
 }
 
+/// Fetch models for the given provider.
+/// Providers: "anthropic" | "google" | "openai" | "custom"
+#[tauri::command]
+async fn fetch_models(provider: String) -> Result<ModelsReply, String> {
+    let models = match provider.as_str() {
+        "anthropic" => {
+            let key = secrets::get("anthropic-api-key")
+                .ok_or_else(|| "API key missing. Open settings.".to_string())?;
+            fetch_anthropic_models(&key).await?
+        }
+        "google" => {
+            let key = secrets::get("google-api-key")
+                .ok_or_else(|| "Google API key missing. Open settings.".to_string())?;
+            fetch_google_models(&key).await?
+        }
+        "openai" => {
+            let key = secrets::get("openai-api-key")
+                .ok_or_else(|| "OpenAI API key missing. Open settings.".to_string())?;
+            fetch_openai_models(&key).await?
+        }
+        "custom" => {
+            let settings = crate::settings::load();
+            if settings.custom_base_url.is_empty() {
+                return Err("Custom base URL not configured. Open settings.".to_string());
+            }
+            let key = secrets::get("custom-api-key")
+                .ok_or_else(|| "Custom API key missing. Open settings.".to_string())?;
+            fetch_custom_models(&settings.custom_base_url, &key).await?
+        }
+        _ => return Err(format!("Unknown provider: {provider}")),
+    };
+    Ok(ModelsReply { models })
+}
+
 /// Opens the configured n8n instance — the URL lives in the Credential Manager.
 #[tauri::command]
 fn open_n8n() {
@@ -397,6 +432,7 @@ pub fn run() {
             secret_present,
             secret_set,
             secret_clear,
+            fetch_models,
             refresh_integration,
             open_n8n,
             open_settings_window,
