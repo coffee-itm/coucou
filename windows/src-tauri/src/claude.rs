@@ -210,18 +210,13 @@ async fn send_openai_compatible(
             }
             let key = secrets::get("custom-api-key")
                 .ok_or_else(|| "Custom API key missing. Open settings.".to_string())?;
-            (normalize_url(&base_url), key)
+            (api_root(&base_url), key)
         }
         _ => return Err(format!("Unknown provider: {provider}")),
     };
 
-    // Google and OpenAI already embed their API version in the base URL. A
-    // custom endpoint gets the standard /v1 prefix, as on macOS.
-    let url = if provider == "custom" {
-        format!("{base_url}/v1/chat/completions")
-    } else {
-        format!("{base_url}/chat/completions")
-    };
+    // Every base URL, hardcoded or custom, now ends with its API version.
+    let url = format!("{base_url}/chat/completions");
 
     let mut msgs: Vec<Value> = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
     
@@ -273,8 +268,9 @@ async fn send_openai_compatible(
         .json(&body);
 
     let response = req.send().await.map_err(|e| format!("Network error: {e}"))?;
-    
+
     let status = response.status();
+    crate::log::line(format!("chat POST {url} -> {status}"));
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
         let detail = serde_json::from_str::<Value>(&text)
@@ -285,7 +281,8 @@ async fn send_openai_compatible(
                     .and_then(Value::as_str)
                     .map(str::to_string)
             })
-            .unwrap_or_else(|| text.chars().take(200).collect());
+            .unwrap_or_else(|| excerpt(&text));
+        crate::log::line(format!("chat POST {url} failed: {detail}"));
         return Err(format!("API {status}: {detail}"));
     }
 
@@ -318,13 +315,16 @@ async fn send_openai_compatible(
     Ok(ChatReply { text: clean })
 }
 
-fn normalize_url(url: &str) -> String {
-    let mut s = url.trim().to_string();
-    while s.ends_with('/') { s.pop(); }
-    for suffix in ["/api", "/v1", "/v1/"] {
-        if s.ends_with(suffix) { s.truncate(s.len() - suffix.len()); }
-    }
-    s
+/// API root of an OpenAI-compatible server: trimmed, and guaranteed to end
+/// with `/v1` — the user may paste the URL with or without it.
+fn api_root(url: &str) -> String {
+    let s = url.trim().trim_end_matches('/');
+    if s.ends_with("/v1") { s.to_string() } else { format!("{s}/v1") }
+}
+
+/// First ~200 characters of a response body, for errors and logs.
+fn excerpt(text: &str) -> String {
+    text.chars().take(200).collect()
 }
 
 fn parse_sse_delta(line: &str) -> Option<String> {
@@ -361,12 +361,22 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Result<Vec<ModelInfo>, Str
         .send()
         .await
         .map_err(|e| format!("Network error: {e}"))?;
-    
-    if !response.status().is_success() {
-        return Err(format!("API error: {}", response.status()));
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    crate::log::line(format!("models GET {url} -> {status}"));
+
+    if !status.is_success() {
+        let detail = excerpt(&text);
+        crate::log::line(format!("models GET {url} failed: {detail}"));
+        return Err(format!("API {status}: {detail}"));
     }
-    
-    let data = response.json::<Value>().await.map_err(|e| e.to_string())?;
+
+    let data = serde_json::from_str::<Value>(&text).map_err(|e| {
+        let detail = excerpt(&text);
+        crate::log::line(format!("models GET {url} non-JSON: {detail}"));
+        format!("Non-JSON reply ({status}): {detail} ({e})")
+    })?;
     let items = data.get("data").and_then(|d| d.as_array()).ok_or("No models data")?;
     
     let models = items.iter()
@@ -392,8 +402,7 @@ pub async fn fetch_openai_models(api_key: &str) -> Result<Vec<ModelInfo>, String
 
 /// Fetch models from custom OpenAI-compatible endpoint.
 pub async fn fetch_custom_models(base_url: &str, api_key: &str) -> Result<Vec<ModelInfo>, String> {
-    let url = normalize_url(base_url);
-    fetch_openai_compatible_models(&url, api_key).await
+    fetch_openai_compatible_models(&api_root(base_url), api_key).await
 }
 
 /// Generic fetch for OpenAI-compatible /models endpoint.
@@ -406,12 +415,22 @@ async fn fetch_openai_compatible_models(base_url: &str, api_key: &str) -> Result
         .send()
         .await
         .map_err(|e| format!("Network error: {e}"))?;
-    
-    if !response.status().is_success() {
-        return Err(format!("API error: {}", response.status()));
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    crate::log::line(format!("models GET {url} -> {status}"));
+
+    if !status.is_success() {
+        let detail = excerpt(&text);
+        crate::log::line(format!("models GET {url} failed: {detail}"));
+        return Err(format!("API {status}: {detail}"));
     }
-    
-    let data = response.json::<Value>().await.map_err(|e| e.to_string())?;
+
+    let data = serde_json::from_str::<Value>(&text).map_err(|e| {
+        let detail = excerpt(&text);
+        crate::log::line(format!("models GET {url} non-JSON: {detail}"));
+        format!("Non-JSON reply ({status}): {detail} ({e})")
+    })?;
     let items = data.get("data").and_then(|d| d.as_array()).ok_or("No models data")?;
     
     let excluded = ["embed", "bge-", "all-minilm", "clip", "rerank", "tts", "whisper", "dall-e", "audio", "image", "moderation", "embedding"];
@@ -447,6 +466,7 @@ async fn call(key: &str, body: &Value) -> Result<Value, String> {
 
     let status = response.status();
     let text = response.text().await.map_err(|e| e.to_string())?;
+    crate::log::line(format!("chat POST {ENDPOINT} -> {status}"));
     if !status.is_success() {
         let detail = serde_json::from_str::<Value>(&text)
             .ok()
@@ -456,7 +476,8 @@ async fn call(key: &str, body: &Value) -> Result<Value, String> {
                     .and_then(Value::as_str)
                     .map(str::to_string)
             })
-            .unwrap_or_else(|| text.chars().take(200).collect());
+            .unwrap_or_else(|| excerpt(&text));
+        crate::log::line(format!("chat POST {ENDPOINT} failed: {detail}"));
         return Err(format!("Claude API {status}: {detail}"));
     }
     serde_json::from_str(&text).map_err(|e| format!("Bad API response: {e}"))
