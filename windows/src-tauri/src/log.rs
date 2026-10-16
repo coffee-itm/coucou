@@ -7,6 +7,10 @@ use std::io::Write;
 use crate::{platform, settings};
 
 pub fn line(message: impl AsRef<str>) {
+    let message = message.as_ref();
+    // Also live in the terminal when the AppImage is launched from one; on a
+    // tray launch nothing is attached and the write is dropped.
+    let _ = writeln!(std::io::stderr(), "[coucou] {message}");
     let t = platform::local_time();
     let stamp = format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
@@ -27,6 +31,6 @@ pub fn line(message: impl AsRef<str>) {
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     if let Ok(mut file) = options.open(path) {
-        let _ = writeln!(file, "{stamp} {}", message.as_ref());
+        let _ = writeln!(file, "{stamp} {message}");
     }
 }

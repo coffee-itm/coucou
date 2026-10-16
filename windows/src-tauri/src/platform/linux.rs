@@ -54,13 +54,23 @@ pub fn local_dir() -> PathBuf {
 /// Environment the webview must inherit, set before any thread or process
 /// starts.
 ///
+/// The desktop session (Cinnamon and friends) exports XApp's GTK module from
+/// its Xsession scripts. The AppImage carries its own GTK, which can never
+/// load a distro module, and GTK only prints a warning about the miss — the
+/// variable is dropped here so the launch stays clean.
+///
 /// Inside an AppImage, WebKit uses the GStreamer bundled with it, and GStreamer
 /// keeps its plugin registry in ~/.cache/gstreamer-1.0 by default — the same
 /// file the system's GStreamer uses. The AppImage is mounted somewhere new on
 /// every launch, so each launch would rewrite the system's registry with
 /// plugin paths that vanish once Coucou quits. Give ours its own file.
 pub fn prepare_environment() {
-    if std::env::var_os("APPIMAGE").is_none() || std::env::var_os("GST_REGISTRY").is_some() {
+    if std::env::var_os("APPIMAGE").is_none() {
+        return;
+    }
+    std::env::remove_var("GTK_MODULES");
+    std::env::remove_var("GTK3_MODULES");
+    if std::env::var_os("GST_REGISTRY").is_some() {
         return;
     }
     let cache = xdg("XDG_CACHE_HOME", ".cache").join("coucou");

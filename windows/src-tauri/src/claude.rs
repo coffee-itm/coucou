@@ -233,10 +233,14 @@ async fn send_openai_compatible(
     }
 
     let mut user_text = query.clone();
+    let mut parts: Vec<Value> = Vec::new();
     if chat.is_empty() {
         if let Some(ctx) = context {
             match ctx {
-                ChatContext::File { name, .. } => {
+                ChatContext::File { name, path } => {
+                    if let Some(part) = file_content_part(&path) {
+                        parts.push(part);
+                    }
                     user_text = format!("File: {name}\n\n{query}");
                 }
                 ChatContext::Window { app_name, title, url } => {
@@ -247,8 +251,14 @@ async fn send_openai_compatible(
             }
         }
     }
-    msgs.push(json!({ "role": "user", "content": user_text }));
-    chat.push(json!({ "role": "user", "content": user_text }));
+    let content = if parts.is_empty() {
+        json!(user_text)
+    } else {
+        parts.push(json!({ "type": "text", "text": user_text }));
+        json!(parts)
+    };
+    msgs.push(json!({ "role": "user", "content": content }));
+    chat.push(json!({ "role": "user", "content": content }));
 
     let body = json!({
         "model": model,
@@ -515,6 +525,38 @@ fn file_block(path: &str) -> Option<Value> {
     }
     let text = std::fs::read_to_string(path).ok()?;
     Some(json!({ "type": "text", "text": format!("File contents:\n{text}") }))
+}
+
+/// OpenAI-compatible content part for a dropped file: images become an
+/// image_url data URI the vision models can read, text/code is inlined
+/// (≤ 200 KB), anything else returns None and stays name-only.
+fn file_content_part(path: &str) -> Option<Value> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let media = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => {
+            let len = std::fs::metadata(path).ok()?.len();
+            if len > MAX_INLINE_TEXT {
+                return None;
+            }
+            let text = std::fs::read_to_string(path).ok()?;
+            return Some(json!({ "type": "text", "text": format!("File contents:\n{text}") }));
+        }
+    };
+
+    let bytes = std::fs::read(path).ok()?;
+    Some(json!({
+        "type": "image_url",
+        "image_url": { "url": format!("data:{media};base64,{}", base64(&bytes)) },
+    }))
 }
 
 /// Small standalone base64 encoder — not worth another dependency.
