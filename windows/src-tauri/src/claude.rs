@@ -215,6 +215,14 @@ async fn send_openai_compatible(
         _ => return Err(format!("Unknown provider: {provider}")),
     };
 
+    // Google and OpenAI already embed their API version in the base URL. A
+    // custom endpoint gets the standard /v1 prefix, as on macOS.
+    let url = if provider == "custom" {
+        format!("{base_url}/v1/chat/completions")
+    } else {
+        format!("{base_url}/chat/completions")
+    };
+
     let mut msgs: Vec<Value> = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
     
     for m in chat.snapshot() {
@@ -229,11 +237,11 @@ async fn send_openai_compatible(
         msgs.push(simplified);
     }
 
-    let mut user_text = query;
+    let mut user_text = query.clone();
     if chat.is_empty() {
         if let Some(ctx) = context {
             match ctx {
-                ChatContext::File { name, path } => {
+                ChatContext::File { name, .. } => {
                     user_text = format!("File: {name}\n\n{query}");
                 }
                 ChatContext::Window { app_name, title, url } => {
@@ -259,8 +267,7 @@ async fn send_openai_compatible(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = format!("{base_url}/chat/completions");
-    let mut req = client.post(&url)
+    let req = client.post(&url)
         .header("Authorization", format!("Bearer {key}"))
         .header("Content-Type", "application/json")
         .json(&body);
@@ -272,23 +279,36 @@ async fn send_openai_compatible(
         let text = response.text().await.unwrap_or_default();
         let detail = serde_json::from_str::<Value>(&text)
             .ok()
-            .and_then(|v| v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()))
-            .unwrap_or(&text[..text.len().min(200)]);
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| text.chars().take(200).collect());
         return Err(format!("API {status}: {detail}"));
     }
 
-    let mut accumulated = String::new();
-    let mut stream = response.bytes_stream();
-    
     use futures_util::StreamExt;
+
+    let mut accumulated = String::new();
+    // SSE lines can be split across network chunks; only complete lines are
+    // parsed, and the tail is flushed once the stream ends.
+    let mut buffer = String::new();
+    let mut stream = response.bytes_stream();
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&chunk);
-        for line in text.lines() {
-            if let Some(delta) = parse_sse_delta(line) {
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buffer.find('\n') {
+            let line = buffer[..pos].trim_end_matches('\r').to_string();
+            buffer.drain(..=pos);
+            if let Some(delta) = parse_sse_delta(&line) {
                 accumulated.push_str(&delta);
             }
         }
+    }
+    if let Some(delta) = parse_sse_delta(buffer.trim_end_matches('\r')) {
+        accumulated.push_str(&delta);
     }
 
     // Filter thinking blocks
@@ -319,14 +339,15 @@ fn parse_sse_delta(line: &str) -> Option<String> {
 }
 
 fn filter_thinking_blocks(text: &str) -> String {
-    let pattern = "？？？[\\s\\S]*?回答";
-    let regex = regex::Regex::new(pattern).ok()?;
-    let range = std::ops::Range { start: 0, end: text.len() };
-    let result = regex.replace_all(text, "").to_string();
+    let without_markers = match regex::Regex::new("？？？[\\s\\S]*?回答") {
+        Ok(re) => re.replace_all(text, "").to_string(),
+        Err(_) => text.to_string(),
+    };
     // Also handle <think blocks
-    let think_pattern = "(?s)<think>.*?</think>";
-    let think_regex = regex::Regex::new(think_pattern).ok()?;
-    think_regex.replace_all(&result, "").trim().to_string()
+    match regex::Regex::new("(?s)<think>.*?</think>") {
+        Ok(re) => re.replace_all(&without_markers, "").trim().to_string(),
+        Err(_) => without_markers.trim().to_string(),
+    }
 }
 
 /// Fetch models from Anthropic API.

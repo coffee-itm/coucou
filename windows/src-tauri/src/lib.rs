@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
-use claude::{Chat, ChatContext, ChatReply, ModelsReply, ModelInfo,
+use claude::{Chat, ChatContext, ChatReply, ModelsReply,
     fetch_anthropic_models, fetch_google_models, fetch_openai_models, fetch_custom_models};
 use files::DroppedFile;
 use hooks::{HookPreview, HookStatus};
@@ -242,7 +242,16 @@ async fn chat_send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    let model = shared.settings.lock().unwrap().model.clone();
+    // Each provider keeps its own chosen model, as on macOS (activeChatModel).
+    let model = {
+        let settings = shared.settings.lock().unwrap();
+        match settings.chat_provider.as_str() {
+            "google" => settings.google_model.clone(),
+            "openai" => settings.openai_model.clone(),
+            "custom" => settings.custom_model.clone(),
+            _ => settings.model.clone(),
+        }
+    };
     claude::send(&chat, &model, query, context).await
 }
 

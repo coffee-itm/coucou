@@ -140,6 +140,7 @@ jobs:
           name: Coucou-Linux
           path: |
             windows/release/Coucou-Linux-*-x86_64.AppImage
+            windows/release/Coucou-Linux-x86_64.AppImage
             windows/release/SHA256SUMS
           retention-days: 3
 
